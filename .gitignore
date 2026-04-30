@@ -130,6 +130,7 @@ dmypy.json
 
 #data
 data/
+embedkgqa_data.tar.gz
 
 #pretrained models
 pretrained_models/
@@ -142,3 +143,9 @@ kge/
 
 #csv
 *.csv
+
+# My code
+local/
+
+# pre-trained embeddings
+kg_embeddings/
