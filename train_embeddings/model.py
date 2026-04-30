@@ -41,14 +41,14 @@ class KGE(torch.nn.Module):
         else:
             print('Incorrect model specified:', self.model)
             exit(0)
-        self.E = torch.nn.Embedding(len(d.entities), ent_vec_dim * multiplier, padding_idx=0)
+        self.E = torch.nn.Embedding(len(d.entities), ent_vec_dim * multiplier)
         
         if self.model == 'RESCAL':
-            self.R = torch.nn.Embedding(len(d.relations), ent_vec_dim * ent_vec_dim, padding_idx=0)
+            self.R = torch.nn.Embedding(len(d.relations), ent_vec_dim * ent_vec_dim)
         elif self.model == 'TuckER':
-            self.R = torch.nn.Embedding(len(d.relations), rel_vec_dim, padding_idx=0)
+            self.R = torch.nn.Embedding(len(d.relations), rel_vec_dim)
         else:
-            self.R = torch.nn.Embedding(len(d.relations), ent_vec_dim * multiplier, padding_idx=0)
+            self.R = torch.nn.Embedding(len(d.relations), ent_vec_dim * multiplier)
 
         self.entity_dim = ent_vec_dim * multiplier
         self.do_batch_norm = True

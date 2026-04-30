@@ -17,8 +17,9 @@ class Experiment:
                  num_iterations=500, batch_size=128, decay_rate=0., cuda=False, 
                  input_dropout=0.3, hidden_dropout1=0.4, hidden_dropout2=0.5,
                  label_smoothing=0., outfile='tucker.model', valid_steps=1, loss_type='BCE', do_batch_norm=1,
-                 dataset='', model='Rotat3', l3_reg = 0.0, load_from = ''):
+                 dataset='', model='Rotat3', l3_reg = 0.0, load_from = '', data=None):
         self.dataset = dataset
+        self.data = data
         self.learning_rate = learning_rate
         self.ent_vec_dim = ent_vec_dim
         self.rel_vec_dim = rel_vec_dim
@@ -76,7 +77,7 @@ class Experiment:
         '''
         
         batch = er_vocab_pairs[idx:idx+self.batch_size]
-        targets = torch.zeros([len(batch), len(d.entities)], dtype=torch.float32)
+        targets = torch.zeros([len(batch), len(self.data.entities)], dtype=torch.float32)
         if self.cuda:
             targets = targets.cuda()
         for idx, pair in enumerate(batch):
@@ -91,7 +92,7 @@ class Experiment:
             hits.append([])
 
         test_data_idxs = self.get_data_idxs(data)
-        er_vocab = self.get_er_vocab(self.get_data_idxs(d.data))
+        er_vocab = self.get_er_vocab(self.get_data_idxs(self.data.data))
 
         print("Number of data points: %d" % len(test_data_idxs))
         for i in tqdm(range(0, len(test_data_idxs), self.batch_size)):
@@ -204,6 +205,8 @@ class Experiment:
 
     def train_and_eval(self, d):
         torch.set_num_threads(2)
+        if self.data is None:
+            self.data = d
         best_valid = [0, 0, 0, 0, 0]
         best_test = [0, 0, 0, 0, 0]
         self.entity_idxs = {d.entities[i]:i for i in range(len(d.entities))}
@@ -327,6 +330,8 @@ class Experiment:
             bn.running_var.data = torch.from_numpy(bn_numpy['running_var']).float()
 
     def test(self, d, split='test'):
+        if self.data is None:
+            self.data = d
         self.entity_idxs = {d.entities[i]:i for i in range(len(d.entities))}
         self.relation_idxs = {d.relations[i]:i for i in range(len(d.relations))}
         model = KGE(d, self.ent_vec_dim, self.rel_vec_dim, **self.kwargs)
@@ -364,7 +369,7 @@ if __name__ == '__main__':
                     help="Entity embedding dimensionality.")
     parser.add_argument("--rdim", type=int, default=200, nargs="?",
                     help="Relation embedding dimensionality.")
-    parser.add_argument("--cuda", type=bool, default=True, nargs="?",
+    parser.add_argument("--cuda", action='store_true', default=True,
                     help="Whether to use cuda (GPU) or not (CPU).")
     parser.add_argument("--input_dropout", type=float, default=0.3, nargs="?",
                     help="Input layer dropout.")
@@ -397,7 +402,7 @@ if __name__ == '__main__':
     seed = 20
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available:
+    if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed) 
 
     experiment = Experiment(num_iterations=args.num_iterations, batch_size=args.batch_size, learning_rate=args.lr, 
