@@ -250,6 +250,7 @@ class RelationExtractor(nn.Module):
     
     def forward(self, sentence, p_head, p_tail, question_len):
         embeds = self.word_embeddings(sentence)
+        question_len = question_len.to(dtype=torch.long, device='cpu')
         packed_output = pack_padded_sequence(embeds, question_len, batch_first=True)
         outputs, (hidden, cell_state) = self.GRU(packed_output)
         outputs, outputs_length = pad_packed_sequence(outputs, batch_first=True)
@@ -276,6 +277,7 @@ class RelationExtractor(nn.Module):
         
     def get_relation_embedding(self, head, sentence, sent_len):
         embeds = self.word_embeddings(sentence.unsqueeze(0))
+        sent_len = sent_len.to(dtype=torch.long, device='cpu')
         packed_output = pack_padded_sequence(embeds, sent_len, batch_first=True)
         outputs, (hidden, cell_state) = self.GRU(packed_output)
         outputs = torch.cat([hidden[0,:,:], hidden[1,:,:]], dim=-1)
@@ -285,6 +287,7 @@ class RelationExtractor(nn.Module):
 
     def get_score_ranked(self, head, sentence, sent_len):
         embeds = self.word_embeddings(sentence.unsqueeze(0))
+        sent_len = sent_len.to(dtype=torch.long, device='cpu')
         packed_output = pack_padded_sequence(embeds, sent_len, batch_first=True)
         outputs, (hidden, cell_state) = self.GRU(packed_output)
         outputs = torch.cat([hidden[0,:,:], hidden[1,:,:]], dim=-1)
@@ -299,7 +302,6 @@ class RelationExtractor(nn.Module):
 
         return scores
         
-
 
 
 

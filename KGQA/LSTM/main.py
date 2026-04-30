@@ -44,7 +44,7 @@ parser.add_argument('--neg_batch_size', type=int, default=128)
 parser.add_argument('--hidden_dim', type=int, default=200)
 parser.add_argument('--embedding_dim', type=int, default=256)
 parser.add_argument('--relation_dim', type=int, default=30)
-parser.add_argument('--use_cuda', type=bool, default=True)
+parser.add_argument('--use_cuda', type=str2bool, default=True)
 parser.add_argument('--patience', type=int, default=5)
 parser.add_argument('--freeze', type=str2bool, default=True)
 
@@ -265,9 +265,10 @@ def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict,
                     for i_batch, a in enumerate(loader):
                         model.zero_grad()
                         question = a[0].to(device)
-                        sent_len = a[1].to(device)
+                        # pack_padded_sequence requires CPU lengths on modern PyTorch.
+                        sent_len = a[1]
                         positive_head = a[2].to(device)
-                        positive_tail = a[3].to(device)                    
+                        positive_tail = a[3].to(device)
 
                         loss = model(sentence=question, p_head=positive_head, p_tail=positive_tail, question_len=sent_len)
                         loss.backward()
