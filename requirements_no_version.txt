@@ -1,0 +1,7 @@
+networkx
+tqdm
+gdown
+prettytable
+transformers
+sentencepiece
+pandas
