@@ -309,6 +309,35 @@ class Experiment:
                     pretty_tbl.add_row(['L3 reg', self.l3_reg])
                     print(pretty_tbl)        
 
+    def load_embedding_files(self, model):
+        model_folder = f"../kg_embeddings/{self.model}/{self.dataset}"
+        E_numpy = np.load(model_folder + '/E.npy')
+        R_numpy = np.load(model_folder + '/R.npy')
+        model.E.weight.data = torch.from_numpy(E_numpy).float()
+        model.R.weight.data = torch.from_numpy(R_numpy).float()
+        if self.model == 'TuckER':
+            W_numpy = np.load(model_folder + '/W.npy')
+            model.W.data = torch.from_numpy(W_numpy).float()
+        for i in range(3):
+            bn_numpy = np.load(model_folder + '/bn' + str(i) + '.npy', allow_pickle=True).item()
+            bn = [model.bn0, model.bn1, model.bn2][i]
+            bn.weight.data = torch.from_numpy(bn_numpy['weight']).float()
+            bn.bias.data = torch.from_numpy(bn_numpy['bias']).float()
+            bn.running_mean.data = torch.from_numpy(bn_numpy['running_mean']).float()
+            bn.running_var.data = torch.from_numpy(bn_numpy['running_var']).float()
+
+    def test(self, d):
+        self.entity_idxs = {d.entities[i]:i for i in range(len(d.entities))}
+        self.relation_idxs = {d.relations[i]:i for i in range(len(d.relations))}
+        model = KGE(d, self.ent_vec_dim, self.rel_vec_dim, **self.kwargs)
+        self.load_embedding_files(model)
+        if self.cuda:
+            model.cuda()
+        print("Testing on test data:")
+        test_results = self.evaluate(model, d.test_data)
+        return test_results
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="FB15k-237", nargs="?",
@@ -349,6 +378,7 @@ if __name__ == '__main__':
                     help="l3 reg hyperparameter")
     parser.add_argument("--load_from", type=str, default='', nargs="?",
                     help="load from state dict")
+    parser.add_argument("--test", action='store_true', help="Test the model instead of training")
 
     args = parser.parse_args()
     dataset = args.dataset
@@ -369,6 +399,9 @@ if __name__ == '__main__':
     
     d=Data(data_dir=data_dir, reverse=True)
 
-    experiment.train_and_eval(d)
+    if args.test:
+        experiment.test(d)
+    else:
+        experiment.train_and_eval(d)
                 
 
