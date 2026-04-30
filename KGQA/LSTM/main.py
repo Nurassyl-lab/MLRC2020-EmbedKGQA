@@ -321,6 +321,12 @@ def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict,
 
         answers, accuracy, hits_at_1, hits_at_5, hits_at_10  = validate(model=model, data_path= test_data_path, word2idx= word2ix, entity2idx= entity2idx, device=device, model_name=model_name, return_hits_at_k=True)
 
+        print('Test results:')
+        print(f'  Accuracy: {accuracy:.6f}')
+        print(f'  Hits@1: {hits_at_1:.6f}')
+        print(f'  Hits@5: {hits_at_5:.6f}')
+        print(f'  Hits@10: {hits_at_10:.6f}')
+
         d = {
             'KG-Model': model_name,
             'KG-Type': kg_type,
