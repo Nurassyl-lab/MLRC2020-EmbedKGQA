@@ -10,6 +10,8 @@ from collections import defaultdict
 from tqdm import tqdm
 import numpy as np
 
+UNK_TOKEN = '<UNK>'
+
 
 class DatasetMetaQA(Dataset):
     def __init__(self, data, word2ix, relations, entities, entity2idx):
@@ -39,7 +41,15 @@ class DatasetMetaQA(Dataset):
     def __getitem__(self, index):
         data_point = self.data[index]
         question_text = data_point[1]
-        question_ids = [self.word_to_ix[word] for word in question_text.split()]
+        unk_idx = self.word_to_ix.get(UNK_TOKEN)
+        question_ids = []
+        for word in question_text.split():
+            if word in self.word_to_ix:
+                question_ids.append(self.word_to_ix[word])
+            elif unk_idx is not None:
+                question_ids.append(unk_idx)
+            else:
+                raise KeyError(f"Word '{word}' is not in the vocabulary and {UNK_TOKEN} is missing")
         head_id = self.entity2idx[data_point[0].strip()]
         tail_ids = []
         for tail_name in data_point[2]:
@@ -82,4 +92,3 @@ class DataLoaderMetaQA(DataLoader):
         self.collate_fn = _collate_fn
 
     
-

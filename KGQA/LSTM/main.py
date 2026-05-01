@@ -1,4 +1,5 @@
 import os
+import copy
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
@@ -47,9 +48,14 @@ parser.add_argument('--relation_dim', type=int, default=30)
 parser.add_argument('--use_cuda', type=str2bool, default=True)
 parser.add_argument('--patience', type=int, default=5)
 parser.add_argument('--freeze', type=str2bool, default=True)
+parser.add_argument('--dataset', type=str, required=True, help='Dataset to use for the experiment. Options: [MetaQA, mquake]')
+parser.add_argument('--loss_type', type=str, default='auto', choices=['auto', 'bce', 'kge'],
+                    help='QA loss to use. auto keeps BCE for MetaQA and uses ranking/KL loss for mquake.')
 
 os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
 args = parser.parse_args()
+
+UNK_TOKEN = '<UNK>'
 
 
 def prepare_embeddings(embedding_dict):
@@ -79,7 +85,24 @@ def get_vocab(data):
             if length > maxLength:
                 maxLength = length
 
+    if UNK_TOKEN not in word_to_ix:
+        idx2word[len(word_to_ix)] = UNK_TOKEN
+        word_to_ix[UNK_TOKEN] = len(word_to_ix)
+
     return word_to_ix, idx2word, maxLength
+
+def encode_question(question, word2ix):
+    unk_idx = word2ix.get(UNK_TOKEN)
+    encoded_question = []
+    for word in question.strip().split():
+        word = word.strip()
+        if word in word2ix:
+            encoded_question.append(word2ix[word])
+        elif unk_idx is not None:
+            encoded_question.append(unk_idx)
+        else:
+            raise KeyError(f"Word '{word}' is not in the vocabulary and {UNK_TOKEN} is missing")
+    return encoded_question
 
 def preprocess_entities_relations(entity_dict, relation_dict, entities, relations):
     e = {}
@@ -103,12 +126,13 @@ def preprocess_entities_relations(entity_dict, relation_dict, entities, relation
     return e,r
 
 def inTopk(scores, ans, k):
-    result = False
-    topk = torch.topk(scores, k)[1]
+    if type(ans) is int:
+        ans = [ans]
+    topk = torch.topk(scores, k)[1].tolist()
     for x in topk:
         if x in ans:
-            result = True
-    return result
+            return True
+    return False
 
 def validate(data_path, device, model, word2idx, entity2idx, model_name, return_hits_at_k):
     model.eval()
@@ -116,7 +140,7 @@ def validate(data_path, device, model, word2idx, entity2idx, model_name, return_
     answers = []
     data_gen = data_generator(data=data, word2ix=word2idx, entity2idx=entity2idx)
     total_correct = 0
-    error_count = 0
+    num_incorrect = 0
 
     hit_at_1 = 0
     hit_at_5 = 0
@@ -125,14 +149,13 @@ def validate(data_path, device, model, word2idx, entity2idx, model_name, return_
     candidates_with_scores = []
     writeCandidatesToFile=False
     
-    for i in tqdm(range(len(data))):
-        try:
+    with torch.no_grad():
+        for i in tqdm(range(len(data))):
             d = next(data_gen)
             head = d[0].to(device)
             question = d[1].to(device)
             ans = d[2]
             ques_len = d[3].unsqueeze(0)
-            tail_test = torch.tensor(ans, dtype=torch.long).to(device)
 
             scores = model.get_score_ranked(head=head, sentence=question, sent_len=ques_len)[0]
             # candidates = qa_nbhood_list[i]
@@ -193,9 +216,7 @@ def validate(data_path, device, model, word2idx, entity2idx, model_name, return_
                 num_incorrect += 1
             q_text = d[-1]
             answers.append(q_text + '\t' + str(pred_ans) + '\t' + str(is_correct))
-        except:
-            error_count += 1
-        
+
     accuracy = total_correct/len(data)
     # print('Error mean rank: %f' % (incorrect_rank_sum/num_incorrect))
     # print('%d out of %d incorrect were not in top 50' % (not_in_top_50_count, num_incorrect))
@@ -223,8 +244,26 @@ def get_chk_suffix():
 
 def get_checkpoint_file_path(chkpt_path, model_name, num_hops, suffix, kg_type):
     return f"{chkpt_path}{model_name}_{num_hops}_{suffix}_{kg_type}"
+
+def load_model_checkpoint(model, checkpoint_file):
+    state = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
+    model_state = model.state_dict()
+    word_key = 'word_embeddings.weight'
+    if word_key in state and state[word_key].shape != model_state[word_key].shape:
+        old_weight = state[word_key]
+        new_weight = model_state[word_key].clone()
+        if old_weight.dim() == 2 and new_weight.dim() == 2 and old_weight.size(1) == new_weight.size(1) and old_weight.size(0) < new_weight.size(0):
+            new_weight[:old_weight.size(0)] = old_weight
+            state[word_key] = new_weight
+            print(f'Expanded checkpoint {word_key} from {tuple(old_weight.shape)} to {tuple(new_weight.shape)}')
+        else:
+            raise ValueError(
+                f"Checkpoint {word_key} has shape {tuple(old_weight.shape)}, "
+                f"but current model expects {tuple(new_weight.shape)}. Retrain with the current QA preprocessing."
+            )
+    model.load_state_dict(state)
         
-def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict, relation_dict, neg_batch_size, batch_size, shuffle, num_workers, nb_epochs, embedding_dim, hidden_dim, relation_dim, gpu, use_cuda,patience, freeze, validate_every, num_hops, lr, entdrop, reldrop, scoredrop, l3_reg, model_name, decay, ls, w_matrix, bn_list, kg_type, valid_data_path=None, test_data_path=None):
+def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict, relation_dict, neg_batch_size, batch_size, shuffle, num_workers, nb_epochs, embedding_dim, hidden_dim, relation_dim, gpu, use_cuda,patience, freeze, validate_every, num_hops, lr, entdrop, reldrop, scoredrop, l3_reg, model_name, decay, ls, loss_type, w_matrix, bn_list, kg_type, valid_data_path=None, test_data_path=None):
     entities = np.load(entity_path)
     relations = np.load(relation_path)
     e,r = preprocess_entities_relations(entity_dict, relation_dict, entities, relations)
@@ -237,16 +276,17 @@ def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict,
 
     dataset = DatasetMetaQA(data=data, word2ix=word2ix, relations=r, entities=e, entity2idx=entity2idx)
 
-    model = RelationExtractor(embedding_dim=embedding_dim, hidden_dim=hidden_dim, vocab_size=len(word2ix), num_entities = len(idx2entity), relation_dim=relation_dim, pretrained_embeddings=embedding_matrix, freeze=freeze, device=device, entdrop = entdrop, reldrop = reldrop, scoredrop = scoredrop, l3_reg = l3_reg, model = model_name, ls = ls, w_matrix = w_matrix, bn_list=bn_list)
+    model = RelationExtractor(embedding_dim=embedding_dim, hidden_dim=hidden_dim, vocab_size=len(word2ix), num_entities = len(idx2entity), relation_dim=relation_dim, pretrained_embeddings=embedding_matrix, freeze=freeze, device=device, entdrop = entdrop, reldrop = reldrop, scoredrop = scoredrop, l3_reg = l3_reg, model = model_name, ls = ls, loss_type=loss_type, w_matrix = w_matrix, bn_list=bn_list)
 
-    checkpoint_path = '../../checkpoints/MetaQA/'
+    checkpoint_path = f'../../checkpoints/{qa_dataset}/'
+    os.makedirs(checkpoint_path, exist_ok=True)
     if mode=='train':
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         scheduler = ExponentialLR(optimizer, decay)
         optimizer.zero_grad()
         model.to(device)
         best_score = -float("inf")
-        best_model = model.state_dict()
+        best_model = copy.deepcopy(model.state_dict())
         no_update = 0
         data_loader = DataLoaderMetaQA(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         for epoch in range(nb_epochs):
@@ -287,7 +327,7 @@ def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict,
                     if score > best_score + eps:
                         best_score = score
                         no_update = 0
-                        best_model = model.state_dict()
+                        best_model = copy.deepcopy(model.state_dict())
                         print(hops + " hop Validation accuracy increased from previous epoch", score)
                         _, test_score = validate(model=model, data_path= test_data_path, word2idx= word2ix, entity2idx= entity2idx, device=device, model_name=model_name, return_hits_at_k=False)
                         print('Test score for best valid so far:', test_score)
@@ -314,7 +354,7 @@ def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict,
         
         print(model_chkpt_file)
         
-        model.load_state_dict(torch.load(model_chkpt_file, map_location=lambda storage, loc: storage))
+        load_model_checkpoint(model, model_chkpt_file)
         model.to(device)
         # for parameter in model.parameters():
         #     parameter.requires_grad = False
@@ -341,21 +381,27 @@ def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict,
                     
 
 def process_text_file(text_file, split=False):
-    data_file = open(text_file, 'r')
     data_array = []
-    for data_line in data_file.readlines():
-        data_line = data_line.strip()
-        if data_line == '':
-            continue
-        data_line = data_line.strip().split('\t')
-        question = data_line[0].split('[')
-        question_1 = question[0]
-        question_2 = question[1].split(']')
-        head = question_2[0].strip()
-        question_2 = question_2[1]
-        question = question_1+'NE'+question_2
-        ans = data_line[1].split('|')
-        data_array.append([head, question.strip(), ans])
+    with open(text_file, 'r') as data_file:
+        for line_no, data_line in enumerate(data_file.readlines(), start=1):
+            data_line = data_line.strip()
+            if data_line == '':
+                continue
+            columns = data_line.split('\t')
+            if len(columns) != 2:
+                raise ValueError(f"{text_file}:{line_no} expected 2 tab-separated columns, got {len(columns)}")
+            question = columns[0].split('[', 1)
+            if len(question) != 2:
+                raise ValueError(f"{text_file}:{line_no} question is missing a [head_entity] marker")
+            question_1 = question[0]
+            question_2 = question[1].split(']', 1)
+            if len(question_2) != 2:
+                raise ValueError(f"{text_file}:{line_no} question is missing a closing ] for the head entity")
+            head = question_2[0].strip()
+            question_2 = question_2[1]
+            question = question_1+'NE'+question_2
+            ans = columns[1].split('|')
+            data_array.append([head, question.strip(), ans])
     if split==False:
         return data_array
     else:
@@ -372,8 +418,7 @@ def data_generator(data, word2ix, entity2idx):
     for i in range(len(data)):
         data_sample = data[i]
         head = entity2idx[data_sample[0].strip()]
-        question = data_sample[1].strip().split(' ')
-        encoded_question = [word2ix[word.strip()] for word in question]
+        encoded_question = encode_question(data_sample[1], word2ix)
         if type(data_sample[2]) is str:
             ans = entity2idx[data_sample[2]]
         else:
@@ -383,22 +428,26 @@ def data_generator(data, word2ix, entity2idx):
 
 
 
-
+qa_dataset=args.dataset
 hops = args.hops
-if hops in ['1', '2', '3']:
+if hops in ['1', '2', '3', 'n']:
     hops = hops + 'hop'
 if args.kg_type == 'half':
-    data_path = '../../data/QA_data/MetaQA/qa_train_' + hops + '_half.txt'
+    data_path = f'../../data/QA_data/{qa_dataset}/qa_train_' + hops + '_half.txt'
 else:
-    data_path = '../../data/QA_data/MetaQA/qa_train_' + hops + '.txt'
+    data_path = f'../../data/QA_data/{qa_dataset}/qa_train_' + hops + '.txt'
 
-valid_data_path = '../../data/QA_data/MetaQA/qa_dev_' + hops + '.txt'
-test_data_path = '../../data/QA_data/MetaQA/qa_test_' + hops + '.txt'
+valid_data_path = f'../../data/QA_data/{qa_dataset}/qa_dev_' + hops + '.txt'
+test_data_path = f'../../data/QA_data/{qa_dataset}/qa_test_' + hops + '.txt'
 
 model_name = args.model
 kg_type = args.kg_type
+qa_loss_type = args.loss_type
+if qa_loss_type == 'auto':
+    qa_loss_type = 'kge' if qa_dataset.lower() == 'mquake' else 'bce'
 print('KG type is', kg_type)
-embedding_folder = '../../pretrained_models/embeddings/' + model_name + '_MetaQA_' + kg_type
+print('QA loss type is', qa_loss_type)
+embedding_folder = '../../pretrained_models/embeddings/' + model_name + f'_{qa_dataset}_' + kg_type
 
 entity_embedding_path = embedding_folder + '/E.npy'
 relation_embedding_path = embedding_folder + '/R.npy'
@@ -442,6 +491,7 @@ l3_reg = args.l3_reg,
 model_name=args.model,
 decay=args.decay,
 ls=args.ls,
+loss_type=qa_loss_type,
 w_matrix=w_matrix,
 bn_list=bn_list,
 kg_type=kg_type)

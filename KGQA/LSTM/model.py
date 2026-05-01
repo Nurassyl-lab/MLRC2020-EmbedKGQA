@@ -11,7 +11,7 @@ from torch.nn.init import xavier_normal_
 
 class RelationExtractor(nn.Module):
 
-    def __init__(self, embedding_dim, hidden_dim, vocab_size, relation_dim, num_entities, pretrained_embeddings, device, entdrop, reldrop, scoredrop, l3_reg, model, ls, w_matrix, bn_list, freeze=True):
+    def __init__(self, embedding_dim, hidden_dim, vocab_size, relation_dim, num_entities, pretrained_embeddings, device, entdrop, reldrop, scoredrop, l3_reg, model, ls, w_matrix, bn_list, loss_type='bce', freeze=True):
         super(RelationExtractor, self).__init__()
         self.device = device
         self.bn_list = bn_list
@@ -19,6 +19,7 @@ class RelationExtractor(nn.Module):
         self.freeze = freeze
         self.label_smoothing = ls
         self.l3_reg = l3_reg
+        self.loss_type = loss_type
         if self.model == 'DistMult':
             multiplier = 1
             self.getScores = self.DistMult
@@ -57,7 +58,14 @@ class RelationExtractor(nn.Module):
         self.bidirectional = True
         
         self.num_entities = num_entities
-        self.loss = torch.nn.BCELoss(reduction='sum')
+        if self.loss_type == 'bce':
+            self.loss = torch.nn.BCELoss(reduction='sum')
+        elif self.loss_type == 'kge':
+            self.loss = self.kge_loss
+            self._klloss = torch.nn.KLDivLoss(reduction='sum')
+        else:
+            raise ValueError(f"Unknown loss_type: {self.loss_type}")
+        print('Loss type:', self.loss_type)
 
         # best: all dropout 0
         self.rel_dropout = torch.nn.Dropout(reldrop)
@@ -107,6 +115,10 @@ class RelationExtractor(nn.Module):
         self.logsoftmax = torch.nn.LogSoftmax(dim=-1)
         self.GRU = nn.LSTM(embedding_dim, self.hidden_dim, self.n_layers, bidirectional=self.bidirectional, batch_first=True)
         
+    def kge_loss(self, scores, targets):
+        return self._klloss(
+            F.log_softmax(scores, dim=1), F.normalize(targets.float(), p=1, dim=1)
+        )
 
     def applyNonLinear(self, outputs):
         outputs = self.lin1(outputs)
@@ -302,6 +314,4 @@ class RelationExtractor(nn.Module):
 
         return scores
         
-
-
 
