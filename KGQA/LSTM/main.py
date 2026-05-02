@@ -52,6 +52,7 @@ parser.add_argument('--qa-dataset', type=str, required=True, help='Dataset to us
 parser.add_argument('--kgembd-checkpoint-folder', type=str, required=True, help='Path to the pretrained KG embeddings checkpoint folder')
 parser.add_argument('--loss_type', type=str, default='auto', choices=['auto', 'bce', 'kge'],
                     help='QA loss to use. auto keeps BCE for MetaQA and uses ranking/KL loss for mquake.')
+parser.add_argument('--rephrased', action='store_true', help='Whether to use rephrased questions during evaluation')
 
 os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5,6,7"
 args = parser.parse_args()
@@ -316,7 +317,7 @@ def load_model_checkpoint(model, checkpoint_file):
             )
     model.load_state_dict(state)
         
-def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict, relation_dict, neg_batch_size, batch_size, shuffle, num_workers, nb_epochs, embedding_dim, hidden_dim, relation_dim, gpu, use_cuda,patience, freeze, validate_every, num_hops, lr, entdrop, reldrop, scoredrop, l3_reg, model_name, decay, ls, loss_type, w_matrix, bn_list, kg_type, valid_data_path=None, test_data_path=None):
+def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict, relation_dict, neg_batch_size, batch_size, shuffle, num_workers, nb_epochs, embedding_dim, hidden_dim, relation_dim, gpu, use_cuda,patience, freeze, validate_every, num_hops, lr, entdrop, reldrop, scoredrop, l3_reg, model_name, decay, ls, loss_type, w_matrix, bn_list, kg_type, valid_data_path=None, test_data_path=None, qa_dataset=None):
     entities = np.load(entity_path)
     relations = np.load(relation_path)
     e,r = preprocess_entities_relations(entity_dict, relation_dict, entities, relations)
@@ -509,7 +510,11 @@ else:
     data_path = f'../../data/QA_data/{qa_dataset}/qa_train_' + hops + '.txt'
 
 valid_data_path = f'../../data/QA_data/{qa_dataset}/qa_dev_' + hops + '.txt'
-test_data_path = f'../../data/QA_data/{qa_dataset}/qa_test_' + hops + '.txt'
+
+if not args.rephrased:
+    test_data_path = f'../../data/QA_data/{qa_dataset}/qa_test_' + hops + '.txt'
+else:
+    test_data_path = f'../../data/QA_data/{qa_dataset}_rephrased/qa_test_' + hops + '.txt'
 
 model_name = args.model
 kg_type = args.kg_type
@@ -566,4 +571,6 @@ ls=args.ls,
 loss_type=qa_loss_type,
 w_matrix=w_matrix,
 bn_list=bn_list,
-kg_type=kg_type)
+kg_type=kg_type,
+qa_dataset=qa_dataset
+)
