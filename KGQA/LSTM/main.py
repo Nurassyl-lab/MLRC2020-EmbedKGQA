@@ -134,6 +134,13 @@ def inTopk(scores, ans, k):
             return True
     return False
 
+def reciprocal_rank(scores, ans):
+    if type(ans) is int:
+        ans = [ans]
+    ranked = torch.argsort(scores, descending=True)
+    best_rank = min((ranked == a).nonzero(as_tuple=True)[0].item() + 1 for a in ans)
+    return 1.0 / best_rank
+
 def validate(data_path, device, model, word2idx, entity2idx, model_name, return_hits_at_k):
     model.eval()
     data = process_text_file(data_path)
@@ -145,6 +152,7 @@ def validate(data_path, device, model, word2idx, entity2idx, model_name, return_
     hit_at_1 = 0
     hit_at_5 = 0
     hit_at_10 = 0
+    reciprocal_rank_sum = 0.0
 
     candidates_with_scores = []
     writeCandidatesToFile=False
@@ -205,6 +213,7 @@ def validate(data_path, device, model, word2idx, entity2idx, model_name, return_
             if inTopk(new_scores, ans, 10):
                 hit_at_10 += 1
 
+            reciprocal_rank_sum += reciprocal_rank(new_scores, ans)
 
             if type(ans) is int:
                 ans = [ans]
@@ -218,11 +227,12 @@ def validate(data_path, device, model, word2idx, entity2idx, model_name, return_
             answers.append(q_text + '\t' + str(pred_ans) + '\t' + str(is_correct))
 
     accuracy = total_correct/len(data)
+    mrr = reciprocal_rank_sum/len(data)
     # print('Error mean rank: %f' % (incorrect_rank_sum/num_incorrect))
     # print('%d out of %d incorrect were not in top 50' % (not_in_top_50_count, num_incorrect))
 
     if return_hits_at_k:
-        return answers, accuracy, (hit_at_1/len(data)), (hit_at_5/len(data)), (hit_at_10/len(data))
+        return answers, accuracy, (hit_at_1/len(data)), (hit_at_5/len(data)), (hit_at_10/len(data)), mrr
     else:
         return answers, accuracy
 
@@ -359,13 +369,14 @@ def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict,
         # for parameter in model.parameters():
         #     parameter.requires_grad = False
 
-        answers, accuracy, hits_at_1, hits_at_5, hits_at_10  = validate(model=model, data_path= test_data_path, word2idx= word2ix, entity2idx= entity2idx, device=device, model_name=model_name, return_hits_at_k=True)
+        answers, accuracy, hits_at_1, hits_at_5, hits_at_10, mrr  = validate(model=model, data_path= test_data_path, word2idx= word2ix, entity2idx= entity2idx, device=device, model_name=model_name, return_hits_at_k=True)
 
         print('Test results:')
-        print(f'  Accuracy: {accuracy:.6f}')
+        print(f'  MRR: {mrr:.6f}')
         print(f'  Hits@1: {hits_at_1:.6f}')
         print(f'  Hits@5: {hits_at_5:.6f}')
         print(f'  Hits@10: {hits_at_10:.6f}')
+        print(f'  Accuracy: {accuracy:.6f}')
 
         d = {
             'KG-Model': model_name,
@@ -374,7 +385,8 @@ def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict,
             'Accuracy': [accuracy], 
             'Hits@1': [hits_at_1],
             'Hits@5': [hits_at_5],
-            'Hits@10': [hits_at_10]
+            'Hits@10': [hits_at_10],
+            'MRR': [mrr]
             }
         df = pd.DataFrame(data=d)
         df.to_csv(f"final_results.csv", mode='a', index=False, header=False)       
