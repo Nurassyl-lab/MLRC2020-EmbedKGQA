@@ -141,18 +141,57 @@ def reciprocal_rank(scores, ans):
     best_rank = min((ranked == a).nonzero(as_tuple=True)[0].item() + 1 for a in ans)
     return 1.0 / best_rank
 
+def init_metric_counts():
+    return {
+        'total': 0,
+        'correct': 0,
+        'hits_at_1': 0,
+        'hits_at_5': 0,
+        'hits_at_10': 0,
+        'reciprocal_rank_sum': 0.0,
+    }
+
+def update_metric_counts(counts, is_correct, hit_at_1, hit_at_5, hit_at_10, reciprocal_rank_value):
+    counts['total'] += 1
+    counts['correct'] += is_correct
+    counts['hits_at_1'] += int(hit_at_1)
+    counts['hits_at_5'] += int(hit_at_5)
+    counts['hits_at_10'] += int(hit_at_10)
+    counts['reciprocal_rank_sum'] += reciprocal_rank_value
+
+def finalize_metric_counts(counts):
+    total = counts['total']
+    return {
+        'Accuracy': counts['correct']/total,
+        'Hits@1': counts['hits_at_1']/total,
+        'Hits@5': counts['hits_at_5']/total,
+        'Hits@10': counts['hits_at_10']/total,
+        'MRR': counts['reciprocal_rank_sum']/total,
+    }
+
+def hop_sort_key(hop):
+    try:
+        return (0, int(hop))
+    except ValueError:
+        return (1, hop)
+
+def print_test_metrics(label, metrics):
+    print(label)
+    print(f'  MRR: {metrics["MRR"]:.6f}')
+    print(f'  Hits@1: {metrics["Hits@1"]:.6f}')
+    print(f'  Hits@5: {metrics["Hits@5"]:.6f}')
+    print(f'  Hits@10: {metrics["Hits@10"]:.6f}')
+    print(f'  Accuracy: {metrics["Accuracy"]:.6f}')
+
 def validate(data_path, device, model, word2idx, entity2idx, model_name, return_hits_at_k):
     model.eval()
     data = process_text_file(data_path)
     answers = []
     data_gen = data_generator(data=data, word2ix=word2idx, entity2idx=entity2idx)
-    total_correct = 0
     num_incorrect = 0
 
-    hit_at_1 = 0
-    hit_at_5 = 0
-    hit_at_10 = 0
-    reciprocal_rank_sum = 0.0
+    metric_counts = init_metric_counts()
+    hop_metric_counts = {}
 
     candidates_with_scores = []
     writeCandidatesToFile=False
@@ -164,6 +203,8 @@ def validate(data_path, device, model, word2idx, entity2idx, model_name, return_
             question = d[1].to(device)
             ans = d[2]
             ques_len = d[3].unsqueeze(0)
+            q_text = d[4]
+            hop = d[5]
 
             scores = model.get_score_ranked(head=head, sentence=question, sent_len=ques_len)[0]
             # candidates = qa_nbhood_list[i]
@@ -188,7 +229,7 @@ def validate(data_path, device, model, word2idx, entity2idx, model_name, return_
             
             if writeCandidatesToFile:
                 entry = {}
-                entry['question'] = d[-1]
+                entry['question'] = q_text
                 head_text = idx2entity[head.item()]
                 entry['head'] = head_text
                 s, c =  torch.topk(new_scores, 200)
@@ -206,35 +247,36 @@ def validate(data_path, device, model, word2idx, entity2idx, model_name, return_
                 candidates_with_scores.append(entry)
 
 
-            if inTopk(new_scores, ans, 1):
-                hit_at_1 += 1
-            if inTopk(new_scores, ans, 5):
-                hit_at_5 += 1
-            if inTopk(new_scores, ans, 10):
-                hit_at_10 += 1
-
-            reciprocal_rank_sum += reciprocal_rank(new_scores, ans)
+            hit_at_1 = inTopk(new_scores, ans, 1)
+            hit_at_5 = inTopk(new_scores, ans, 5)
+            hit_at_10 = inTopk(new_scores, ans, 10)
+            reciprocal_rank_value = reciprocal_rank(new_scores, ans)
 
             if type(ans) is int:
                 ans = [ans]
             is_correct = 0
             if pred_ans in ans:
-                total_correct += 1
                 is_correct = 1
             else:
                 num_incorrect += 1
-            q_text = d[-1]
+
+            update_metric_counts(metric_counts, is_correct, hit_at_1, hit_at_5, hit_at_10, reciprocal_rank_value)
+            if hop is not None:
+                if hop not in hop_metric_counts:
+                    hop_metric_counts[hop] = init_metric_counts()
+                update_metric_counts(hop_metric_counts[hop], is_correct, hit_at_1, hit_at_5, hit_at_10, reciprocal_rank_value)
+
             answers.append(q_text + '\t' + str(pred_ans) + '\t' + str(is_correct))
 
-    accuracy = total_correct/len(data)
-    mrr = reciprocal_rank_sum/len(data)
+    overall_metrics = finalize_metric_counts(metric_counts)
+    hop_metrics = {hop: finalize_metric_counts(counts) for hop, counts in hop_metric_counts.items()}
     # print('Error mean rank: %f' % (incorrect_rank_sum/num_incorrect))
     # print('%d out of %d incorrect were not in top 50' % (not_in_top_50_count, num_incorrect))
 
     if return_hits_at_k:
-        return answers, accuracy, (hit_at_1/len(data)), (hit_at_5/len(data)), (hit_at_10/len(data)), mrr
+        return answers, overall_metrics, hop_metrics
     else:
-        return answers, accuracy
+        return answers, overall_metrics['Accuracy']
 
 def writeToFile(lines, fname):
     f = open(fname, 'w')
@@ -369,26 +411,26 @@ def perform_experiment(data_path, mode, entity_path, relation_path, entity_dict,
         # for parameter in model.parameters():
         #     parameter.requires_grad = False
 
-        answers, accuracy, hits_at_1, hits_at_5, hits_at_10, mrr  = validate(model=model, data_path= test_data_path, word2idx= word2ix, entity2idx= entity2idx, device=device, model_name=model_name, return_hits_at_k=True)
+        answers, overall_metrics, hop_metrics  = validate(model=model, data_path= test_data_path, word2idx= word2ix, entity2idx= entity2idx, device=device, model_name=model_name, return_hits_at_k=True)
 
-        print('Test results:')
-        print(f'  MRR: {mrr:.6f}')
-        print(f'  Hits@1: {hits_at_1:.6f}')
-        print(f'  Hits@5: {hits_at_5:.6f}')
-        print(f'  Hits@10: {hits_at_10:.6f}')
-        print(f'  Accuracy: {accuracy:.6f}')
+        print_test_metrics('[Test overall]', overall_metrics)
+        for hop in sorted(hop_metrics, key=hop_sort_key):
+            print_test_metrics(f'[Test {hop}-hop]', hop_metrics[hop])
 
-        d = {
+        results = [{
             'KG-Model': model_name,
             'KG-Type': kg_type,
             'hops': num_hops,
-            'Accuracy': [accuracy], 
-            'Hits@1': [hits_at_1],
-            'Hits@5': [hits_at_5],
-            'Hits@10': [hits_at_10],
-            'MRR': [mrr]
-            }
-        df = pd.DataFrame(data=d)
+            **overall_metrics,
+            }]
+        for hop in sorted(hop_metrics, key=hop_sort_key):
+            results.append({
+                'KG-Model': model_name,
+                'KG-Type': kg_type,
+                'hops': f'{hop}hop',
+                **hop_metrics[hop],
+                })
+        df = pd.DataFrame(data=results)
         df.to_csv(f"final_results.csv", mode='a', index=False, header=False)       
                     
 
@@ -400,9 +442,17 @@ def process_text_file(text_file, split=False):
             if data_line == '':
                 continue
             columns = data_line.split('\t')
-            if len(columns) != 2:
-                raise ValueError(f"{text_file}:{line_no} expected 2 tab-separated columns, got {len(columns)}")
-            question = columns[0].split('[', 1)
+            if len(columns) == 2:
+                hop = None
+                question_text = columns[0]
+                answer_text = columns[1]
+            elif len(columns) == 3:
+                hop = columns[0].strip()
+                question_text = columns[1]
+                answer_text = columns[2]
+            else:
+                raise ValueError(f"{text_file}:{line_no} expected 2 or 3 tab-separated columns, got {len(columns)}")
+            question = question_text.split('[', 1)
             if len(question) != 2:
                 raise ValueError(f"{text_file}:{line_no} question is missing a [head_entity] marker")
             question_1 = question[0]
@@ -412,8 +462,11 @@ def process_text_file(text_file, split=False):
             head = question_2[0].strip()
             question_2 = question_2[1]
             question = question_1+'NE'+question_2
-            ans = columns[1].split('|')
-            data_array.append([head, question.strip(), ans])
+            ans = answer_text.split('|')
+            data_point = [head, question.strip(), ans]
+            if hop is not None:
+                data_point.append(hop)
+            data_array.append(data_point)
     if split==False:
         return data_array
     else:
@@ -422,8 +475,12 @@ def process_text_file(text_file, split=False):
             head = line[0]
             question = line[1]
             tails = line[2]
+            hop = line[3] if len(line) > 3 else None
             for tail in tails:
-                data.append([head, question, tail])
+                data_point = [head, question, tail]
+                if hop is not None:
+                    data_point.append(hop)
+                data.append(data_point)
         return data
 
 def data_generator(data, word2ix, entity2idx):
@@ -431,12 +488,13 @@ def data_generator(data, word2ix, entity2idx):
         data_sample = data[i]
         head = entity2idx[data_sample[0].strip()]
         encoded_question = encode_question(data_sample[1], word2ix)
+        hop = data_sample[3] if len(data_sample) > 3 else None
         if type(data_sample[2]) is str:
             ans = entity2idx[data_sample[2]]
         else:
             ans = [entity2idx[entity.strip()] for entity in list(data_sample[2])]
 
-        yield torch.tensor(head, dtype=torch.long),torch.tensor(encoded_question, dtype=torch.long) , ans, torch.tensor(len(encoded_question), dtype=torch.long), data_sample[1]
+        yield torch.tensor(head, dtype=torch.long),torch.tensor(encoded_question, dtype=torch.long) , ans, torch.tensor(len(encoded_question), dtype=torch.long), data_sample[1], hop
 
 
 
