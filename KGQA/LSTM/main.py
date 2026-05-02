@@ -48,7 +48,8 @@ parser.add_argument('--relation_dim', type=int, default=30)
 parser.add_argument('--use_cuda', type=str2bool, default=True)
 parser.add_argument('--patience', type=int, default=5)
 parser.add_argument('--freeze', type=str2bool, default=True)
-parser.add_argument('--dataset', type=str, required=True, help='Dataset to use for the experiment. Options: [MetaQA, mquake]')
+parser.add_argument('--qa-dataset', type=str, required=True, help='Dataset to use for the experiment. Options: [MetaQA, mquake]')
+parser.add_argument('--kgembd-checkpoint-folder', type=str, required=True, help='Path to the pretrained KG embeddings checkpoint folder')
 parser.add_argument('--loss_type', type=str, default='auto', choices=['auto', 'bce', 'kge'],
                     help='QA loss to use. auto keeps BCE for MetaQA and uses ranking/KL loss for mquake.')
 
@@ -498,7 +499,7 @@ def data_generator(data, word2ix, entity2idx):
 
 
 
-qa_dataset=args.dataset
+qa_dataset=args.qa_dataset
 hops = args.hops
 if hops in ['1', '2', '3', 'n']:
     hops = hops + 'hop'
@@ -517,7 +518,8 @@ if qa_loss_type == 'auto':
     qa_loss_type = 'kge' if qa_dataset.lower() == 'mquake' else 'bce'
 print('KG type is', kg_type)
 print('QA loss type is', qa_loss_type)
-embedding_folder = '../../pretrained_models/embeddings/' + model_name + f'_{qa_dataset}_' + kg_type
+kgembed_checkpoint_folder = args.kgembd_checkpoint_folder
+embedding_folder = '../../pretrained_models/embeddings/' + model_name + f'_{kgembed_checkpoint_folder}_' + kg_type
 
 entity_embedding_path = embedding_folder + '/E.npy'
 relation_embedding_path = embedding_folder + '/R.npy'
