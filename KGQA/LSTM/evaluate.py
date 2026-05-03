@@ -452,6 +452,12 @@ def main():
     load_model_checkpoint(model, checkpoint_file)
     model.to(device)
 
+    # Display model parameter counts
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f'Total parameters: {total_params:,}')
+    print(f'Trainable parameters: {trainable_params:,}')
+
     answers, overall_metrics, hop_metrics = evaluate(
         data_path=eval_data_path,
         word2idx=word2ix,
